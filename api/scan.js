@@ -1,22 +1,13 @@
-const net = require('net');
-
-// Fonction pour scanner un port précis
-const checkPort = (host, port, timeout = 1000) => {
-    return new Promise((resolve) => {
-        const socket = new net.Socket();
-        socket.setTimeout(timeout);
-        
-        socket.on('connect', () => { socket.destroy(); resolve({ port, status: 'OUVERT' }); });
-        socket.on('timeout', () => { socket.destroy(); resolve({ port, status: 'FERMÉ' }); });
-        socket.on('error', () => { socket.destroy(); resolve({ port, status: 'FERMÉ' }); });
-        
-        socket.connect(port, host);
-    });
+// Fonction pour tester un port via HTTP/HTTPS avec un timeout strict
+const fetchTimeout = (url, timeout = 1500) => {
+    return Promise.race([
+        fetch(url, { method: 'HEAD', mode: 'no-cors' }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeout))
+    ]);
 };
 
-// C'est cette fonction que Vercel va exécuter à chaque fois qu'on clique sur le bouton
 module.exports = async (req, res) => {
-    // Autoriser les requêtes depuis ton iPhone (CORS)
+    // Configuration des headers CORS pour ton iPhone
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -29,28 +20,44 @@ module.exports = async (req, res) => {
         return res.status(405).json({ error: "Méthode non autorisée" });
     }
 
-    const { target } = req.body;
+    let { target } = req.body;
     if (!target) {
         return res.status(400).json({ error: "Ajoute une cible bro !" });
     }
 
-    const portsToScan = [22, 80, 443, 3306, 8080]; // Liste réduite pour que Vercel réponde vite
+    // Nettoyage de la cible (retirer http/https si l'utilisateur l'a mis)
+    target = target.replace(/^(https?:\/\/)?(www\.)?/, '');
+
+    // Liste des ports Web classiques testables en Serverless
+    const commonWebPorts = [
+        { port: 80, protocol: 'http://' },
+        { port: 443, protocol: 'https://' },
+        { port: 8080, protocol: 'http://' },
+        { port: 8443, protocol: 'https://' }
+    ];
+
     const results = [];
 
     try {
-        for (const port of portsToScan) {
-            const result = await checkPort(target, port);
-            if (result.status === 'OUVERT') {
-                results.push(`Port ${port}: OUVERT 🟢`);
+        for (const item of commonWebPorts) {
+            const url = `${item.protocol}${target}:${item.port}`;
+            try {
+                // On tente de joindre le port
+                await fetchTimeout(url, 1500);
+                results.push(`Port ${item.port}: OUVERT 🟢`);
+            } catch (err) {
+                if (err.message === 'Timeout') {
+                    results.push(`Port ${item.port}: FILTRÉ / FERMÉ (Timeout) 🔴`);
+                } else {
+                    // Si le serveur refuse la connexion ou renvoie une erreur CORS, 
+                    // cela signifie quand même que le port a répondu et est donc OUVERT !
+                    results.push(`Port ${item.port}: OUVERT 🟢 (Réponse reçue)`);
+                }
             }
-        }
-
-        if (results.length === 0) {
-            results.push("Aucun port standard ouvert détecté.");
         }
 
         res.status(200).json({ target, result: results.join('\n') });
     } catch (error) {
-        res.status(500).json({ error: "Erreur pendant le scan." });
+        res.status(500).json({ error: "Erreur pendant l'exécution du scan." });
     }
 };
