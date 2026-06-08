@@ -1,0 +1,80 @@
+const express = require('express');
+const cors = require('cors');
+const net = require('net');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Autorise ta PWA Vercel à interroger ce serveur
+app.use(cors({ origin: '*' }));
+app.use(express.json());
+
+// Route de test
+app.get('/', (req, res) => {
+    res.json({ status: "online", message: "N-D Pentest API Ready 👿" });
+});
+
+// Fonction pour scanner un port précis
+const checkPort = (host, port, timeout = 1200) => {
+    return new Promise((resolve) => {
+        const socket = new net.Socket();
+        
+        socket.setTimeout(timeout);
+        
+        socket.on('connect', () => {
+            socket.destroy();
+            resolve({ port, status: 'OUVERT' });
+        });
+        
+        socket.on('timeout', () => {
+            socket.destroy();
+            resolve({ port, status: 'FERMÉ' });
+        });
+        
+        socket.on('error', () => {
+            socket.destroy();
+            resolve({ port, status: 'FERMÉ' });
+        });
+        
+        socket.connect(port, host);
+    });
+};
+
+// Route pour lancer le scan de ports classiques
+app.post('/api/scan', async (req, res) => {
+    const { target } = req.body;
+    
+    if (!target) {
+        return res.status(400).json({ error: "Ajoute une cible (IP ou domaine) !" });
+    }
+
+    // Liste des ports essentiels à vérifier
+    const portsToScan = [21, 22, 23, 25, 53, 80, 110, 139, 443, 445, 3306, 8080];
+    const results = [];
+
+    try {
+        for (const port of portsToScan) {
+            const result = await checkPort(target, port);
+            if (result.status === 'OUVERT') {
+                results.push(`Port ${port}: OUVERT 🟢`);
+            }
+        }
+
+        if (results.length === 0) {
+            results.push("Aucun port standard ouvert détecté.");
+        }
+
+        res.json({ 
+            target, 
+            status: "success", 
+            result: results.join('\n') 
+        });
+
+    } catch (error) {
+        res.status(500).json({ error: "Erreur pendant le scan réseau." });
+    }
+});
+
+app.listen(PORT, () => {
+    console.log(`[+] Serveur actif sur le port ${PORT}`);
+});
